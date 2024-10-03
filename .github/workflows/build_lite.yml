@@ -1,0 +1,99 @@
+# https://opensource.com/article/21/7/custom-raspberry-pi-image
+# https://geoffhudik.com/tech/2020/05/15/using-pi-gen-to-build-a-custom-raspbian-lite-image/
+
+name: Build lite image
+
+on:
+  push:
+
+jobs:
+  build_image:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: See what we are working with
+        run: ls -l
+      
+      - name: Write config
+        run: |
+          echo "IMG_NAME='DockerPi'" >> config
+          echo "LOCALE_DEFAULT='en_US.UTF-8'" >> config
+          echo "KEYBOARD_KEYMAP='us'" >> config
+          echo "KEYBOARD_LAYOUT='English (US)'" >> config
+          echo "TIMEZONE_DEFAULT='America/Chicago'" >> config
+          echo "ENABLE_SSH=1" >> config
+
+      - name: Check config
+        run: cat config
+      
+      - name: Skip stages
+        run: |
+          touch ./stage3/SKIP
+          touch ./stage4/SKIP
+          touch ./stage4/SKIP_IMAGES
+          touch ./stage5/SKIP
+          touch ./stage5/SKIP_IMAGES
+
+      - name: Make Docker step
+        run: mkdir ./stage2/04-docker
+
+      - name: Add Docker repository to Apt sources
+        run: |
+          cat << 'EOF' > ./stage2/04-docker/00-run-chroot.sh
+          #!/bin/bash
+          # Add Docker's official GPG key:
+          apt-get update
+          apt-get install ca-certificates curl
+          install -m 0755 -d /etc/apt/keyrings
+          curl -fsSL https://download.docker.com/linux/debian/gpg -o /etc/apt/keyrings/docker.asc
+          chmod a+r /etc/apt/keyrings/docker.asc
+
+          # Add the repository to Apt sources:
+          echo \
+            "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/debian \
+            $(. /etc/os-release && echo "$VERSION_CODENAME") stable" | \
+            tee /etc/apt/sources.list.d/docker.list > /dev/null
+          apt-get update
+          EOF
+          chmod +x ./stage2/04-docker/00-run-chroot.sh
+
+      - name: Install Docker packages
+        run: |
+          cat << 'EOF' > ./stage2/04-docker/01-packages
+          docker-ce
+          docker-ce-cli
+          containerd.io
+          docker-buildx-plugin
+          docker-compose-plugin
+          EOF
+          
+      - name: Check Docker step
+        run: | 
+          ls -l ./stage2/04-docker
+          cat ./stage2/04-docker/00-run-chroot.sh
+          cat ./stage2/04-docker/01-packages
+
+      - name: Install extra dependencies
+        run: |
+          sudo apt update && sudo apt install -y \
+            quilt \
+            qemu-user-static \
+            debootstrap \
+            libarchive-tools \
+            arch-test
+
+      - name: Build image
+        run: sudo ./build.sh
+
+      - name: Check build output
+        run: ls -l ./deploy
+
+      - name: Release
+        if: startsWith(github.ref, 'refs/tags/')  
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ./deploy/*
